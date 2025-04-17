@@ -34,7 +34,7 @@ const registerUser = asyncHandler(async (req, res) => {
 
     //user details
     const { username, email, fullName, password } = req.body;
-    console.log("Email: ", email);
+    // console.log("Email: ", email);
 
     //validation
     if (
@@ -167,7 +167,7 @@ const loginUser = asyncHandler(async (req, res) => {
 
     const options = {
         httpOnly: true,
-        secure: true,
+        secure: false,
     };
     return res
         .status(200)
@@ -191,7 +191,7 @@ const logoutUser = asyncHandler(async (req, res) => {
         req.user._id,
         {
             $set: {
-                refreshToken: undefined,
+                refreshToken: 1,
             },
         },
         {
@@ -200,13 +200,13 @@ const logoutUser = asyncHandler(async (req, res) => {
     );
     const options = {
         httpOnly: true,
-        secure: true,
+        secure: false,
     };
     return res
         .status(200)
         .clearCookie("accessToken", options)
         .clearCookie("refreshToken", options)
-        .json(new ApiResponse(200, "User logged out successfully"));
+        .json(new ApiResponse(200,{}, "User logged out successfully"));
 });
 
 export { registerUser, loginUser, logoutUser };
