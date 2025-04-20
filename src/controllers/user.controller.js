@@ -192,7 +192,7 @@ const logoutUser = asyncHandler(async (req, res) => {
     await User.findByIdAndUpdate(
         req.user._id,
         {
-            $set: {
+            $unset: {
                 refreshToken: 1,
             },
         },
@@ -300,7 +300,7 @@ const updateAccountDetails = asyncHandler(async (req, res) => {
     return res
         .status(200)
         .json(
-            new ApiResponse(200, req.user, "Current user fetched successfully")
+            new ApiResponse(200, user, "Current user fetched successfully")
         );
 });
 
@@ -357,8 +357,9 @@ const getUserChanneProfile = asyncHandler(async (req, res) => {
     if (!username?.trim()) {
         throw new ApiError(400, "Username is missing");
     }
+    console.log("Fetching channel for:", username);
 
-    const channel = User.aggregate([
+    const channel = await User.aggregate([
         {
             $match: {
                 username: username?.toLowerCase(),
@@ -410,8 +411,11 @@ const getUserChanneProfile = asyncHandler(async (req, res) => {
             },
         },
     ]);
+    console.log("Channel aggregation result:", channel);
+
+
     if (!channel?.length) {
-        throw new ApiError(404, "Channel doesn't exist");
+        throw new ApiError(404, "Channel doesn't Exist");
     }
     return res
         .status(200)
