@@ -215,6 +215,7 @@ const deleteVideo = asyncHandler(async (req, res) => {
         new ApiResponse(200, null, "Video deleted successfully")
     );
 });
+
 const togglePublishStatus = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
     if (!videoId || !mongoose.Types.ObjectId.isValid(videoId)) {
