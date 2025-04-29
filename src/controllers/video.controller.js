@@ -7,15 +7,80 @@ import mongoose from "mongoose";
 import { formatDuration } from "../utils/formatDuration.js";
 
 const getAllVideos = asyncHandler(async (req, res) => {
-    const { page = 1, limit = 10, query, sortBy, sortType, userId } = req.query;
-    /**
-     * 1. show case all of the video of the user has
-     * 2. show the title, file link
-     */
+    const {
+        page = 1,
+        limit = 10,
+        query = "",
+        sortBy = "createdAt",
+        sortType = "desc",
+        userId,
+    } = req.query;
+    // 1. Build match filter for MongoDB
+    const matchStage = {};
+
+    // a) If a search query is provided, do case-insensitive match on title
+    if (query) {
+        matchStage.title = { $regex: query, $options: "i" };
+    }
+
+    // b) If a userId is specified (e.g., for profile page), filter by owner
+    if (userId) {
+        matchStage.owner = userId;
+    }
+
+    // c) Only return published videos
+    matchStage.isPublished = true;
+
+    // 2. Set sorting direction
+    const sortStage = {};
+    sortStage[sortBy] = sortType === "asc" ? 1 : -1;
+    // 3. Aggregate query with pagination
+    const aggregateQuery = Video.aggregate([
+        {
+            $match: matchStage,
+        },
+        {
+            $sort: sortStage,
+        },
+        {
+            $lookup: {
+                from: "users",
+                localField: "owner",
+                foreignField: "_id",
+                as: "owner",
+            },
+        },
+        {
+            $unwind: "$owner",
+        },
+        {
+            $project: {
+                title: 1,
+                videoFile: 1,
+                thumbnail: 1,
+                views: 1,
+                duration: 1,
+                createdAt: 1,
+                isPublished: 1,
+                "owner._id": 1,
+                "owner.username": 1,
+                "owner.email": 1,
+            },
+        },
+    ]);
+    const options = {
+        page: parseInt(page),
+        limit: parseInt(limit),
+    };
+    // 4. Execute paginated aggregate
+    const result = await Video.aggregatePaginate(aggregateQuery, options);
+    // 5. Send response
+    res.status(200).json(
+        new ApiResponse(200, result, "Videos fetched successfully")
+    );
 });
 
 const publishAVideo = asyncHandler(async (req, res) => {
-    
     const { title, description } = req.body;
 
     const videoLocalPath = req.files.videoFile?.[0]?.path;
@@ -32,7 +97,7 @@ const publishAVideo = asyncHandler(async (req, res) => {
         throw new ApiError(500, "Upload failed, please try again");
     }
     const formattedDuration = formatDuration(uploadedVideo.duration);
-    
+
     const newVideo = await Video.create({
         title,
         description,
@@ -47,8 +112,6 @@ const publishAVideo = asyncHandler(async (req, res) => {
     return res
         .status(201)
         .json(new ApiResponse(201, newVideo, "Video published successfully"));
-
-
 });
 
 const getVideoById = asyncHandler(async (req, res) => {
@@ -68,7 +131,7 @@ const getVideoById = asyncHandler(async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(videoId)) {
         throw new ApiError(404, "Invalid video Id format");
     }
-    const vid = await video.findById(videoId);
+    const vid = await Video.findById(videoId);
     if (!vid) {
         throw new ApiError(404, "Video does not exist");
     }
@@ -86,24 +149,93 @@ const getVideoById = asyncHandler(async (req, res) => {
 
 const updateVideo = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
-    /*
-    1.get the video id by searching it for the user by videoId
-    2.update the video link,title,description,duration
-    3.check if the views are same or not 
-    4.save it to mongoDB
-    */
+    if (!videoId || !mongoose.Types.ObjectId.isValid(videoId)) {
+        throw new ApiError(400, "Invalid video ID");
+    }
+    const existingVid = await Video.findById(videoId);
+    if (!existingVid) {
+        throw new ApiError(400, "Video not found");
+    }
+    if (existingVid.owner.toString() !== req.user._id.toString()) {
+        throw new ApiError(403, "You are not authorized to update this video");
+    }
+    const { title, description } = req.body;
+
+    if (title) existingVid.title = title;
+    if (description) existingVid.description = description;
+    //video link updation
+    if (req.files?.videoFile?.[0]) {
+        const videoResult = await uploadOnCloudinary(
+            req.files.videoFile[0].path
+        );
+        if (!videoResult?.url) {
+            throw new ApiError(500, "Video upload failed");
+        }
+        existingVid.videoFile = videoResult.url;
+
+        // Optional: Update duration from Cloudinary if available
+        if (videoResult.duration) {
+            existingVid.duration = formatDuration(videoResult.duration);
+        }
+    }
+
+    //thumbnail updation
+    if (req.files?.thumbnail?.[0]) {
+        const thumbnailResult = await uploadOnCloudinary(
+            req.files.thumbnail[0].path
+        );
+        if (!thumbnailResult?.url) {
+            throw new ApiError(500, "Thumbnail upload failed");
+        }
+        existingVid.thumbnail = thumbnailResult.url;
+    }
+
+    await existingVid.save();
+
+    res.status(200).json(
+        new ApiResponse(200, existingVid, "Video updated successfully")
+    );
 });
 
 const deleteVideo = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
-    /*
-    1.get the video id by searching it for the user by videoId
-    2.delete the video
-    3.save it to mongoDB
-    */
+    if (!videoId || !mongoose.Types.ObjectId.isValid(videoId)) {
+        throw new ApiError(400, "Invalid video ID");
+    }
+    const existingVid = await Video.findById(videoId);
+    if (!existingVid) {
+        throw new ApiError(400, "Video not found");
+    }
+    if (existingVid.owner.toString() !== req.user._id.toString()) {
+        throw new ApiError(403, "You are not authorized to delete this video");
+    }
+    await Video.findByIdAndDelete(videoId);
+    //coudinary delete
+    res.status(200).json(
+        new ApiResponse(200, null, "Video deleted successfully")
+    );
 });
 const togglePublishStatus = asyncHandler(async (req, res) => {
     const { videoId } = req.params;
+    if (!videoId || !mongoose.Types.ObjectId.isValid(videoId)) {
+        throw new ApiError(400, "Invalid video ID");
+    }
+    const existingVid = await Video.findById(videoId);
+    if (!existingVid) {
+        throw new ApiError(400, "Video not found");
+    }
+    if (existingVid.owner.toString() !== req.user._id.toString()) {
+        throw new ApiError(403, "You are not authorized to delete this video");
+    }
+    existingVid.isPublished = !existingVid.isPublished;
+    await existingVid.save();
+    res.status(200).json(
+        new ApiResponse(
+            200,
+            existingVid,
+            `Video ${existingVid.isPublished ? "published" : "unpublished"} successfully`
+        )
+    );
 });
 
 export {
